@@ -7,6 +7,7 @@ import urllib.request
 import logging
 import pickle
 
+import anyio
 import connexion
 from connexion.decorators.uri_parsing import Swagger2URIParser
 from werkzeug.debug import DebuggedApplication
@@ -27,7 +28,7 @@ from schematic.schemas.generator import SchemaGenerator
 from schematic.schemas.explorer import SchemaExplorer
 from schematic.store.synapse import SynapseStorage, ManifestDownload
 from synapseclient.core.exceptions import SynapseHTTPError, SynapseAuthenticationError, SynapseUnmetAccessRestrictions, SynapseNoCredentialsError, SynapseTimeoutError
-from schematic.utils.general import entity_type_mapping
+from schematic.utils.general import entity_type_mapping, profile
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.DEBUG)
@@ -555,7 +556,9 @@ def get_viz_tangled_tree_layers(schema_url, figure_type):
 
     return layers[0]
 
-def download_manifest(access_token, manifest_id, new_manifest_name='', as_json=True):
+
+@profile(sort_by='cumulative', strip_dirs=True) 
+async def download_manifest(access_token, manifest_id, new_manifest_name='', as_json=True):
     """
     Download a manifest based on a given manifest id. 
     Args:
@@ -566,6 +569,25 @@ def download_manifest(access_token, manifest_id, new_manifest_name='', as_json=T
     Return: 
         file path of the downloaded manifest
     """
+
+    event = anyio.Event()
+    manifest_local_file_path = {}
+
+    def download_manifest_test(syn, manifest_id, new_manifest_name):
+        try:
+            md = ManifestDownload(syn, manifest_id)
+            manifest_data = ManifestDownload.download_manifest(md, new_manifest_name)
+            #return local file path
+            manifest_local_file_path = manifest_data['path']
+        except TypeError as e:
+            raise TypeError(f'Failed to download manifest {manifest_id}.')
+        return manifest_local_file_path
+
+    async def download_manifest_to_folder(event, syn, manifest_id, new_manifest_name):
+        file_path = await anyio.to_thread.run_sync(download_manifest_test, syn, manifest_id, new_manifest_name)
+        await event.set()
+        manifest_local_file_path["file_path"] = file_path
+
     # call config_handler()
     config_handler()
 
@@ -573,18 +595,19 @@ def download_manifest(access_token, manifest_id, new_manifest_name='', as_json=T
     store = SynapseStorage(access_token=access_token)
     # try logging in to asset store
     syn = store.login(access_token=access_token)
-    try: 
-        md = ManifestDownload(syn, manifest_id)
-        manifest_data = ManifestDownload.download_manifest(md, new_manifest_name)
-        #return local file path
-        manifest_local_file_path = manifest_data['path']
-    except TypeError as e:
-        raise TypeError(f'Failed to download manifest {manifest_id}.')
+
+    async with anyio.create_task_group() as task_group:
+        task_group.start_soon(download_manifest_to_folder, event, syn, manifest_id, new_manifest_name)
+        await event.wait()
+
     if as_json:
-        manifest_json = return_as_json(manifest_local_file_path)
+        manifest_json = return_as_json(manifest_local_file_path['file_path'])
         return manifest_json
     else:
-        return manifest_local_file_path
+        mimetype='application/csv'
+        file_path=os.path.basename(manifest_local_file_path['file_path'])
+        dir_name = os.path.dirname(manifest_local_file_path['file_path'])
+        return send_from_directory(directory=dir_name, path=file_path, as_attachment=True, mimetype=mimetype, max_age=0)
 
 #@profile(sort_by='cumulative', strip_dirs=True)  
 def download_dataset_manifest(access_token, dataset_id, asset_view, as_json, new_manifest_name=''):
