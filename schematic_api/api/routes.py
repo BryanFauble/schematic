@@ -6,8 +6,11 @@ import shutil
 import urllib.request
 import logging
 import pickle
+import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import anyio
+import asyncio
 import connexion
 from connexion.decorators.uri_parsing import Swagger2URIParser
 from werkzeug.debug import DebuggedApplication
@@ -556,9 +559,89 @@ def get_viz_tangled_tree_layers(schema_url, figure_type):
 
     return layers[0]
 
+# function that will run in the background
+async def download_manifest_async(syn, manifest_id, new_manifest_name):
+    try:
+        md = ManifestDownload(syn, manifest_id)
+        manifest_data = ManifestDownload.download_manifest(md, new_manifest_name)
+        #return local file path
+        manifest_local_file_path = manifest_data['path']
+    except TypeError as e:
+        raise TypeError(f'Failed to download manifest {manifest_id}.')
+    mimetype='application/csv'
+    dir_name = os.path.dirname(manifest_local_file_path)
+    file_path=os.path.basename(manifest_local_file_path)
+    
+    return send_from_directory(directory=dir_name, path=file_path, as_attachment=True, mimetype=mimetype, max_age=0)
 
-@profile(sort_by='cumulative', strip_dirs=True) 
-async def download_manifest(access_token, manifest_id, new_manifest_name='', as_json=True):
+task_list = {}
+async def retrieve_task(status_token):
+    # print('task list', task_list)
+    # task=task_list[status_token]
+    # task_status = check_task_status(task)
+
+    # if task_status:
+    #     return await task
+    future = task_list[status_token]
+    while True:
+        if as_completed(future):
+            result = future.result()
+            break
+        else:
+            time.sleep(10)
+    return result
+
+
+def check_task_status(task):
+    if not task.done():
+        return False
+    else:
+        return True
+
+def save_task(task, token):
+    # task_dictionary={random_number: {"task": task, "result"}}
+    task_list[token] = task
+    return token
+
+def save_for_future(future, token):
+    task_list[token] = future
+
+
+async def download_manifest_test2(access_token, manifest_id, new_manifest_name='', as_json=True):
+    # call config_handler()
+    config_handler()
+
+    # use Synapse Storage
+    store = SynapseStorage(access_token=access_token)
+    # try logging in to asset store
+    syn = store.login(access_token=access_token)
+
+    executor = ThreadPoolExecutor(max_workers=10)
+    future = executor.submit(download_manifest_async, syn, manifest_id, new_manifest_name)
+
+    while True:
+        if as_completed(future):
+            result = future.result()
+            break
+        else:
+            time.sleep(10)
+    return result
+
+    # token="a random token"
+
+    # save_for_future(future, token)
+    # return "a random token"
+
+    # task = asyncio.create_task(download_manifest_async(syn, manifest_id, new_manifest_name))
+
+    # save_task(task, token="a random token")
+    # print('doing something else')
+
+    # return "a random token"
+
+
+# @profile(sort_by='cumulative', strip_dirs=True) 
+async def download_manifest_test1(access_token, manifest_id, new_manifest_name='', as_json=True):
     """
     Download a manifest based on a given manifest id. 
     Args:
@@ -569,6 +652,7 @@ async def download_manifest(access_token, manifest_id, new_manifest_name='', as_
     Return: 
         file path of the downloaded manifest
     """
+    start_time = time.time()
 
     event = anyio.Event()
     manifest_local_file_path = {}
@@ -607,6 +691,8 @@ async def download_manifest(access_token, manifest_id, new_manifest_name='', as_
         mimetype='application/csv'
         file_path=os.path.basename(manifest_local_file_path['file_path'])
         dir_name = os.path.dirname(manifest_local_file_path['file_path'])
+        end_time = time.time()
+        duration = end_time - start_time
         return send_from_directory(directory=dir_name, path=file_path, as_attachment=True, mimetype=mimetype, max_age=0)
 
 #@profile(sort_by='cumulative', strip_dirs=True)  

@@ -100,6 +100,33 @@ paths:
                 type: string
       tags:
         - Manifest Operations
+  /manifest/download/status:
+    get:
+      summary: Endpoint to check the status of manifest being downloaded
+      description: Endpoint to check the status of manifest being downloaded
+      parameters:
+        - in: query
+          name: status_token
+          schema:
+            type: string
+            nullable: false
+          description: Token
+          example: Token
+          required: true  
+      operationId: schematic_api.api.routes.retrieve_task
+      responses:
+        "200":
+          description: A manifest gets downloaded and local file path of the manifest gets returned.
+          content:
+            text/csv:
+              schema:
+                type: string
+        "403":
+          description: You don't have access to the requested resources. 
+        "500":
+          description: Please check schematic log
+      tags:
+        - Manifest Operations 
   /manifest/download:
     get:
       summary: Endpoint to download an existing manifest by using a manifest id
@@ -135,7 +162,7 @@ paths:
             default: True
           description: if True return the manifest in JSON format. Default to True
           required: false
-      operationId: schematic_api.api.routes.download_manifest
+      operationId: schematic_api.api.routes.download_manifest_test2
       responses:
         "200":
           description: A manifest gets downloaded and local file path of the manifest gets returned.
