@@ -1,5 +1,6 @@
 import os
 from schematic_api.api import app
+import asyncio
 
 
 def main(): 
@@ -9,7 +10,7 @@ def main():
     port = int(port)
 
     # Launch app
-    app.run(host=host, port=port, debug=False)
+    app.run(host=host, port=port, debug=True)
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())
