@@ -347,6 +347,7 @@ class ManifestGenerator(object):
         Returns:
             Dictionary, containing portions of the json schema
         """
+        print('json schema file path', json_schema_filepath)
         if not json_schema_filepath:
             # if no json schema is provided; there must be
             # schema explorer defined for schema.org schema
@@ -1486,7 +1487,6 @@ class ManifestGenerator(object):
         Returns:
             Googlesheet URL, pandas dataframe, or an Excel spreadsheet 
         """
-
         # Handle case when no dataset ID is provided
         if not dataset_id:
             manifest_url = self.get_empty_manifest(json_schema_filepath=json_schema)
@@ -1494,6 +1494,7 @@ class ManifestGenerator(object):
             # if output_form parameter is set to "excel", return an excel spreadsheet
             if output_format == "excel": 
                 output_file_path = self.export_sheet_to_excel(title = self.title, manifest_url = manifest_url, output_location = output_path)
+                print('output file path', output_file_path)
                 return output_file_path
             # since we are not going to return an empty dataframe for an empty manifest, here we will just return a google sheet url for all other cases
             else: 

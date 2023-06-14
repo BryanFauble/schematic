@@ -6,6 +6,8 @@ import shutil
 import urllib.request
 import logging
 import pickle
+import asyncio
+import time
 
 import connexion
 from connexion.decorators.uri_parsing import Swagger2URIParser
@@ -207,7 +209,7 @@ def get_temp_jsonld(schema_url):
     return tmp_file.name
 
 # @before_request
-def get_manifest_route(schema_url: str, use_annotations: bool, dataset_ids=None, asset_view = None, output_format=None, title=None, access_token=None):
+async def get_manifest_route(schema_url: str, use_annotations: bool, dataset_ids=None, asset_view = None, output_format=None, title=None, access_token=None):
     """Get the immediate dependencies that are related to a given source node.
         Args:
             schema_url: link to data model in json ld format
@@ -262,7 +264,7 @@ def get_manifest_route(schema_url: str, use_annotations: bool, dataset_ids=None,
                 )
 
 
-    def create_single_manifest(data_type, title, dataset_id=None, output_format=None, access_token=None):
+    async def create_single_manifest(data_type, title, dataset_id=None, output_format=None, access_token=None):
         # create object of type ManifestGenerator
         manifest_generator = ManifestGenerator(
             path_to_json_ld=jsonld,
@@ -276,22 +278,28 @@ def get_manifest_route(schema_url: str, use_annotations: bool, dataset_ids=None,
         if output_format:
             if "dataframe" in output_format:
                 output_format = "dataframe"
-
-        result = manifest_generator.get_manifest(
-            dataset_id=dataset_id, sheet_url=True, output_format=output_format, access_token=access_token
-        )
+        
+        loop = asyncio.get_running_loop()
+        result =  await loop.run_in_executor(None, manifest_generator.get_manifest, dataset_id, True, None, output_format, None, access_token)
+        return result
+        # result =  manifest_generator.get_manifest(
+        #     dataset_id=dataset_id, sheet_url=True, output_format=output_format, access_token=access_token
+        # )
 
         # return an excel file if output_format is set to "excel"
-        if output_format == "excel":
-            dir_name = os.path.dirname(result)
-            file_name = os.path.basename(result)
-            mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
-            return send_from_directory(directory=dir_name, path=file_name, as_attachment=True, mimetype=mimetype, max_age=0)
+        # if output_format == "excel":
+        #     dir_name = os.path.dirname(result)
+        #     file_name = os.path.basename(result)
+        #     mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+        #     return send_from_directory(directory=dir_name, path=file_name, as_attachment=True, mimetype=mimetype, max_age=0)
                
-        return result
+        # return result
 
     # Gather all returned result urls
     all_results = []
+    # gather all tasks
+    all_manifest_tasks = {}
+
     if data_type[0] == 'all manifests':
         sg = SchemaGenerator(path_to_json_ld=jsonld)
         component_digraph = sg.se.get_digraph_by_edge_type('requiresComponent')
@@ -302,10 +310,14 @@ def get_manifest_route(schema_url: str, use_annotations: bool, dataset_ids=None,
             else: 
                 t = f'Example.{component}.manifest'
             if output_format != "excel":
-                result = create_single_manifest(data_type=component, output_format=output_format, title=t, access_token=access_token)
-                all_results.append(result)
+                all_manifest_tasks[component] = asyncio.create_task(create_single_manifest(data_type=component, output_format=output_format, title=t, access_token=access_token))
             else: 
                 app.logger.error('Currently we do not support returning multiple files as Excel format at once. Please choose a different output format. ')
+    
+        # for component in all_manifest_tasks:
+        #     result = await all_manifest_tasks[component]
+        #     all_results.append(result)
+
     else:
         for i, dt in enumerate(data_type):
             if not title: 
@@ -317,18 +329,36 @@ def get_manifest_route(schema_url: str, use_annotations: bool, dataset_ids=None,
                     t = title
             if dataset_ids:
                 # if a dataset_id is provided add this to the function call.
-                result = create_single_manifest(data_type=dt, dataset_id=dataset_ids[i], output_format=output_format, title=t, access_token=access_token)
+                #task = asyncio.create_task(create_single_manifestdata_type=dt, dataset_id=dataset_ids[i], output_format=output_format, title=t, access_token=access_token)
+                all_manifest_tasks[dt] = asyncio.create_task(create_single_manifest(data_type=dt, dataset_id=dataset_ids[i], output_format=output_format, title=t, access_token=access_token))
+                # result = create_single_manifest(data_type=dt, dataset_id=dataset_ids[i], output_format=output_format, title=t, access_token=access_token)
             else:
-                result = create_single_manifest(data_type=dt, output_format=output_format, title=t, access_token=access_token)
+                all_manifest_tasks[dt] = asyncio.create_task(create_single_manifest(data_type=dt, output_format=output_format, title=t, access_token=access_token))
+                # result = create_single_manifest(data_type=dt, output_format=output_format, title=t, access_token=access_token)
+                #task = asyncio.create_task(create_single_manifest, data_type=dt, output_format=output_format, title=t, access_token=access_token)
 
             # if output is pandas dataframe or google sheet url
-            if isinstance(result, str) or isinstance(result, pd.DataFrame):
-                all_results.append(result)
-            else: 
-                if len(data_type) > 1:
-                    app.logger.warning(f'Currently we do not support returning multiple files as Excel format at once. Only {t} would get returned. ')
-                return result
+            # if isinstance(result, str) or isinstance(result, pd.DataFrame):
+            #     all_results.append(result)
+            # else: 
+            #     if len(data_type) > 1:
+            #         app.logger.warning(f'Currently we do not support returning multiple files as Excel format at once. Only {t} would get returned. ')
+            #     return result
 
+    # gather result of asynchronous run 
+    for component in all_manifest_tasks:
+        result = await all_manifest_tasks[component]
+        if isinstance(result, str) or isinstance(result, pd.DataFrame):
+            all_results.append(result)
+
+        if output_format == "excel" and '.xlsx' in result:
+            dir_name = os.path.dirname(result)
+            file_name = os.path.basename(result)
+            mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+            if len(data_type) > 0:
+                app.logger.warning(f'Currently we do not support returning multiple files as Excel format at once. Only {file_name} would get returned. ')
+            return send_from_directory(directory=dir_name, path=file_name, as_attachment=True, mimetype=mimetype, max_age=0)
+        
     return all_results
 
 #####profile validate manifest route function 
