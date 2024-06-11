@@ -71,8 +71,11 @@ from schematic.exceptions import AccessCredentialsError
 from schematic.configuration.configuration import CONFIG
 from synapseclient.models.annotations import Annotations
 import asyncio
+from opentelemetry import trace
 
 logger = logging.getLogger("Synapse storage")
+
+tracer = trace.get_tracer("store:SynapseStorage")
 
 
 @dataclass
@@ -251,6 +254,7 @@ class SynapseStorage(BaseStorage):
                 # instead of guessing how much space that we left, print out .synapseCache here
                 logger.info(f"the total size of .synapseCache is: {nbytes} bytes")
 
+    @tracer.start_as_current_span("SynapseStorage::_query_fileview")
     def _query_fileview(self):
         self._purge_synapse_cache()
         try:
@@ -415,6 +419,7 @@ class SynapseStorage(BaseStorage):
 
         return sorted_projects_list
 
+    @tracer.start_as_current_span("SynapseStorage::getStorageDatasetsInProject")
     def getStorageDatasetsInProject(self, projectId: str) -> list[tuple[str, str]]:
         """Gets all datasets in folder under a given storage project that the current user has access to.
 
@@ -459,6 +464,7 @@ class SynapseStorage(BaseStorage):
 
         return sorted_dataset_list
 
+    @tracer.start_as_current_span("SynapseStorage::getFilesInStorageDataset")
     def getFilesInStorageDataset(
         self, datasetId: str, fileNames: List = None, fullpath: bool = True
     ) -> List[Tuple[str, str]]:
@@ -528,6 +534,7 @@ class SynapseStorage(BaseStorage):
 
         return manifest_syn_id
 
+    @tracer.start_as_current_span("SynapseStorage::getDatasetManifest")
     def getDatasetManifest(
         self,
         datasetId: str,
@@ -714,6 +721,7 @@ class SynapseStorage(BaseStorage):
         manifest = manifest.fillna("")
         return dataset_files, manifest
 
+    @tracer.start_as_current_span("SynapseStorage::updateDatasetManifestFiles")
     def updateDatasetManifestFiles(
         self, dmge: DataModelGraphExplorer, datasetId: str, store: bool = True
     ) -> Union[Tuple[str, pd.DataFrame], None]:
@@ -796,6 +804,7 @@ class SynapseStorage(BaseStorage):
 
         return files
 
+    @tracer.start_as_current_span("SynapseStorage::getProjectManifests")
     def getProjectManifests(
         self, projectId: str
     ) -> list[tuple[tuple[str, str], tuple[str, str], tuple[str, str]]]:
@@ -1102,6 +1111,7 @@ class SynapseStorage(BaseStorage):
             return {None: None}
 
     @missing_entity_handler
+    @tracer.start_as_current_span("SynapseStorage::uploadDB")
     def uploadDB(
         self,
         dmge: DataModelGraphExplorer,
@@ -1149,6 +1159,7 @@ class SynapseStorage(BaseStorage):
 
         return manifest_table_id, manifest, table_manifest
 
+    @tracer.start_as_current_span("SynapseStorage::formatDB")
     def formatDB(self, dmge, manifest, table_column_names):
         """
         Method to format a manifest appropriatly for upload as table
@@ -1211,6 +1222,7 @@ class SynapseStorage(BaseStorage):
 
         return col_schema, table_manifest
 
+    @tracer.start_as_current_span("SynapseStorage::buildDB")
     def buildDB(
         self,
         datasetId: str,
@@ -1286,6 +1298,7 @@ class SynapseStorage(BaseStorage):
 
         return manifest_table_id
 
+    @tracer.start_as_current_span("SynapseStorage::upload_manifest_file")
     def upload_manifest_file(
         self,
         manifest,
@@ -1431,6 +1444,7 @@ class SynapseStorage(BaseStorage):
         return annos
 
     @missing_entity_handler
+    @tracer.start_as_current_span("SynapseStorage::format_manifest_annotations")
     def format_manifest_annotations(self, manifest, manifest_synapse_id):
         """
         Set annotations for the manifest (as a whole) so they can be applied to the manifest table or csv.
@@ -1640,6 +1654,7 @@ class SynapseStorage(BaseStorage):
             table_name = "synapse_storage_manifest_table"
         return table_name, component_name
 
+    @tracer.start_as_current_span("SynapseStorage::_add_annotations")
     def _add_annotations(
         self,
         dmge,
@@ -1736,7 +1751,8 @@ class SynapseStorage(BaseStorage):
         row["entityId"] = entityId
         manifest.loc[idx, "entityId"] = entityId
         return manifest, entityId
-
+    
+    @tracer.start_as_current_span("SynapseStorage::add_annotations_to_entities_files")
     async def add_annotations_to_entities_files(
         self,
         dmge,
@@ -1807,6 +1823,7 @@ class SynapseStorage(BaseStorage):
                 logger.info(f"Added annotations to entity: {entityId}")
         return manifest
 
+    @tracer.start_as_current_span("SynapseStorage::upload_manifest_as_table")
     def upload_manifest_as_table(
         self,
         dmge: DataModelGraphExplorer,
@@ -1902,6 +1919,7 @@ class SynapseStorage(BaseStorage):
         self.syn.set_annotations(manifest_annotations)
         return manifest_synapse_file_id
 
+    @tracer.start_as_current_span("SynapseStorage::upload_manifest_as_csv")
     def upload_manifest_as_csv(
         self,
         dmge,
@@ -1962,6 +1980,7 @@ class SynapseStorage(BaseStorage):
 
         return manifest_synapse_file_id
 
+    @tracer.start_as_current_span("SynapseStorage::upload_manifest_combo")
     def upload_manifest_combo(
         self,
         dmge,
@@ -2053,6 +2072,7 @@ class SynapseStorage(BaseStorage):
         self.syn.set_annotations(manifest_annotations)
         return manifest_synapse_file_id
 
+    @tracer.start_as_current_span("SynapseStorage::associateMetadataWithFiles")
     def associateMetadataWithFiles(
         self,
         dmge: DataModelGraphExplorer,

@@ -20,6 +20,7 @@ from flask import request
 import pandas as pd
 import json
 from typing import Optional
+from functools import wraps
 
 from schematic.configuration.configuration import CONFIG
 from schematic.visualization.attributes_explorer import AttributesExplorer
@@ -40,9 +41,57 @@ from synapseclient.core.exceptions import (
 )
 from schematic.utils.general import entity_type_mapping
 from schematic.utils.schema_utils import get_property_label_from_display_name, DisplayLabelType
+from opentelemetry import trace
+from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.resources import SERVICE_NAME, Resource
+from opentelemetry.sdk.trace.export import BatchSpanProcessor, ConsoleSpanExporter, SimpleSpanProcessor
+from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.DEBUG)
+
+trace.set_tracer_provider(
+    TracerProvider(
+        resource=Resource(attributes={SERVICE_NAME: "schematic-api"})
+    )
+)
+
+
+class FileSpanExporter(ConsoleSpanExporter):
+    """Create an exporter for OTEL data to a file."""
+
+    def __init__(self, file_path) -> None:
+        """Init with a path."""
+        self.file_path = file_path
+
+    def export(self, spans) -> None:
+        """Export the spans to the file."""
+        with open(self.file_path, "a", encoding="utf-8") as f:
+            for span in spans:
+                span_json_one_line = span.to_json().replace("\n", "") + "\n"
+                f.write(span_json_one_line)
+
+trace.get_tracer_provider().add_span_processor(BatchSpanProcessor(OTLPSpanExporter()))
+processor = SimpleSpanProcessor(FileSpanExporter("otel_spans_schemati_api.json"))
+trace.get_tracer_provider().add_span_processor(processor)
+tracer = trace.get_tracer("schematic-api")
+
+def trace_function_params():
+    def decorator(func):
+        @wraps(func)
+        def wrapper(**kwargs):
+            tracer = trace.get_tracer(__name__)
+            # Start a new span with the function's name
+            with tracer.start_as_current_span(func.__name__) as span:
+                # Set values of parameters as tags 
+                for name, value in kwargs.items():
+                    span.set_attribute(name, value)
+                # Call the actual function
+                result = func(**kwargs)
+                return result
+        return wrapper
+    return decorator
+
 
 
 def config_handler(asset_view: str = None):
@@ -210,6 +259,7 @@ def save_file(file_key="csv_file"):
 
     return temp_path
 
+@tracer.start_as_current_span("routes:initalize_metadata_model")
 def initalize_metadata_model(schema_url, data_model_labels):
     # get path to temp data model file (csv or jsonld) as appropriate
     data_model = get_temp_model_path(schema_url)
@@ -259,6 +309,7 @@ def get_temp_model_path(schema_url):
 
 
 # @before_request
+@trace_function_params()
 def get_manifest_route(
     schema_url: str,
     use_annotations: bool,
@@ -283,7 +334,6 @@ def get_manifest_route(
     Returns:
         Googlesheet URL (if sheet_url is True), or pandas dataframe (if sheet_url is False).
     """
-
     # Get access token from request header
     access_token = get_access_token()
 
@@ -381,6 +431,7 @@ def validate_manifest_route(
 
 #####profile validate manifest route function
 # @profile(sort_by='cumulative', strip_dirs=True)
+@trace_function_params()
 def submit_manifest_route(
     schema_url,
     data_model_labels: str,
