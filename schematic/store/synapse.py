@@ -1373,8 +1373,8 @@ class SynapseStorage(BaseStorage):
         return await annotation_class.store_async(self.syn)
 
     @missing_entity_handler
-    def format_row_annotations(
-        self, dmge, row, annos: dict, hideBlanks: bool, annotation_keys: str
+    async def format_row_annotations(
+        self, dmge, row, entityId: str, hideBlanks: bool, annotation_keys: str
     ):
         # prepare metadata for Synapse storage (resolve display name into a name that Synapse annotations support (e.g no spaces, parenthesis)
         # note: the removal of special characters, will apply only to annotation keys; we are not altering the manifest
@@ -1405,6 +1405,8 @@ class SynapseStorage(BaseStorage):
 
             metadataSyn[keySyn] = v
         # set annotation(s) for the various objects/items in a dataset on Synapse
+        annos = await self.get_async_annotation(entityId)
+
         csv_list_regex = comma_separated_list_regex()
         for anno_k, anno_v in metadataSyn.items():
             # Remove keys with nan or empty string values from dict of annotations to be uploaded
@@ -1429,6 +1431,7 @@ class SynapseStorage(BaseStorage):
                     annos[anno_k] = anno_v
 
         return annos
+
 
     @missing_entity_handler
     def format_manifest_annotations(self, manifest, manifest_synapse_id):
@@ -1670,11 +1673,11 @@ class SynapseStorage(BaseStorage):
             self.syn.set_annotations(annos)
         return
 
-    async def _get_store_annotations_async(
+    async def _format_store_annotations_async(
         self,
-        entityId: str,
         dmge: DataModelGraphExplorer,
         row: pd.Series,
+        entityId: str,
         hideBlanks: bool,
         annotation_keys: str,
     ) -> None:
@@ -1687,36 +1690,14 @@ class SynapseStorage(BaseStorage):
             hideBlanks (bool): if true, does not upload annotation keys with blank values. If false, Uploads Annotation keys with empty string values.
             annotation_keys (str): annotation keys, default to "class_label"
         """
-        # get annotations asynchronously
-        requests = set()
-        get_annos = asyncio.create_task(self.get_async_annotation(entityId))
-        requests.add(get_annos)
+        # Format annotations for Synapse
+        annos = await self.format_row_annotations(
+            dmge, row, entityId, hideBlanks, annotation_keys
+        )
 
-        while requests:
-            done_tasks, pending_tasks = await asyncio.wait(
-                requests, return_when=asyncio.FIRST_COMPLETED
-            )
-            requests = pending_tasks
-            # after the task of getting annotation gets completed,
-            # store annotations
-            for completed_task in done_tasks:
-                try:
-                    annos = completed_task.result()
-
-                    if isinstance(annos, Annotations):
-                        logger.info("Successfully stored annotations: {annos}")
-                    else:
-                        # remove special characters in annotations
-                        annos = self.format_row_annotations(
-                            dmge, row, annos, hideBlanks, annotation_keys
-                        )
-                        requests.add(
-                            asyncio.create_task(
-                                self.store_async_annotation(annotation_dict=annos)
-                            )
-                        )
-                except Exception as e:
-                    logger.error(f"failed with { repr(e) }.")
+        if annos:
+            # Store annotations for an entity folder
+            self.store_async_annotation(annotation_dict=annos)
 
     def _create_entity_id(self, idx, row, manifest, datasetId):
         """Helper function to generate an entityId and add it to the appropriate row in the manifest.
@@ -1797,13 +1778,7 @@ class SynapseStorage(BaseStorage):
 
             # Adding annotations to connected files.
             if entityId:
-                await self._get_store_annotations_async(
-                    entityId=entityId,
-                    dmge=dmge,
-                    row=row,
-                    hideBlanks=hideBlanks,
-                    annotation_keys=annotation_keys,
-                )
+                await self._format_store_annotations_async(dmge, row, entityId, hideBlanks, annotation_keys)
                 logger.info(f"Added annotations to entity: {entityId}")
         return manifest
 
