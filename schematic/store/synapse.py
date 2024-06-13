@@ -72,6 +72,7 @@ from schematic.configuration.configuration import CONFIG
 from synapseclient.models.annotations import Annotations
 import asyncio
 from opentelemetry import trace
+from dataclasses import asdict
 
 logger = logging.getLogger("Synapse storage")
 
@@ -1393,6 +1394,7 @@ class SynapseStorage(BaseStorage):
         # note: the removal of special characters, will apply only to annotation keys; we are not altering the manifest
         # this could create a divergence between manifest column and annotations. this should be ok for most use cases.
         # columns with special characters are outside of the schema
+        print('entity id!!!!!!!!!!!', entityId)
         metadataSyn = {}
         blacklist_chars = ["(", ")", ".", " ", "-"]
 
@@ -1687,7 +1689,8 @@ class SynapseStorage(BaseStorage):
             # Store annotations for an entity folder
             self.syn.set_annotations(annos)
         return
-
+    
+    @tracer.start_as_current_span("SynapseStorage::_format_store_annotations_async")
     async def _format_store_annotations_async(
         self,
         dmge: DataModelGraphExplorer,
@@ -1706,13 +1709,13 @@ class SynapseStorage(BaseStorage):
             annotation_keys (str): annotation keys, default to "class_label"
         """
         # Format annotations for Synapse
-        annos = await self.format_row_annotations(
+        annos = self.format_row_annotations(
             dmge, row, entityId, hideBlanks, annotation_keys
         )
 
         if annos:
             # Store annotations for an entity folder
-            self.store_async_annotation(annotation_dict=annos)
+            asyncio.create_task(self.store_async_annotation(annotation_dict=annos))
 
     def _create_entity_id(self, idx, row, manifest, datasetId):
         """Helper function to generate an entityId and add it to the appropriate row in the manifest.
@@ -1775,6 +1778,7 @@ class SynapseStorage(BaseStorage):
             ).drop("entityId_x", axis=1)
 
         # Fill `entityId` for each row if missing and annotate entity as appropriate
+        requests=set()
         for idx, row in manifest.iterrows():
             if not row["entityId"] and (
                 manifest_record_type == "file_and_entities"
@@ -1794,8 +1798,45 @@ class SynapseStorage(BaseStorage):
 
             # Adding annotations to connected files.
             if entityId:
-                await self._format_store_annotations_async(dmge, row, entityId, hideBlanks, annotation_keys)
-                logger.info(f"Added annotations to entity: {entityId}")
+
+                # Format annotations for Synapse
+                # annos = await self.format_row_annotations(
+                #     dmge, row, entityId, hideBlanks, annotation_keys
+                # )
+                annos_task = asyncio.create_task(self.format_row_annotations(
+                    dmge, row, entityId, hideBlanks, annotation_keys
+                ))
+                requests.add(annos_task)
+
+                # if annos:
+                #     # Store annotations for an entity folder
+                #     requests.append(asyncio.create_task(self.store_async_annotation(annotation_dict=annos)))
+                while requests:
+                    done_tasks, pending_tasks = await asyncio.wait(requests, return_when=asyncio.FIRST_COMPLETED)
+                    requests = pending_tasks
+
+                for completed_task in done_tasks:
+                    try:
+                        annos = completed_task.result()
+
+                        if isinstance(annos, Annotations):
+                            annos_dict = asdict(annos)
+                            entity_id = annos_dict["id"]
+                            logger.info(f"Successfully stored annotations for {entity_id}")
+                        else:
+                            # remove special characters in annotations
+                            entity_id = annos["EntityId"]
+                            logger.info(f"Got annotations for {entity_id} entity")
+                            requests.add(asyncio.create_task(self.store_async_annotation(annotation_dict=annos)))
+
+                    except Exception as e:
+                        raise RuntimeError(f"failed with { repr(e) }.")
+
+                #logger.info(f"Added annotations to entity: {entityId}")
+        #responses = await asyncio.gather(*requests)
+        # for response in responses:
+        #     if response:
+        #         #print('response', response)
         return manifest
 
     @tracer.start_as_current_span("SynapseStorage::upload_manifest_as_table")
