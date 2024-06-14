@@ -1811,26 +1811,26 @@ class SynapseStorage(BaseStorage):
                 # if annos:
                 #     # Store annotations for an entity folder
                 #     requests.append(asyncio.create_task(self.store_async_annotation(annotation_dict=annos)))
-                while requests:
-                    done_tasks, pending_tasks = await asyncio.wait(requests, return_when=asyncio.FIRST_COMPLETED)
-                    requests = pending_tasks
+        while requests:
+            done_tasks, pending_tasks = await asyncio.wait(requests, return_when=asyncio.FIRST_COMPLETED)
+            requests = pending_tasks
 
-                for completed_task in done_tasks:
-                    try:
-                        annos = completed_task.result()
+        for completed_task in done_tasks:
+            try:
+                annos = completed_task.result()
 
-                        if isinstance(annos, Annotations):
-                            annos_dict = asdict(annos)
-                            entity_id = annos_dict["id"]
-                            logger.info(f"Successfully stored annotations for {entity_id}")
-                        else:
-                            # remove special characters in annotations
-                            entity_id = annos["EntityId"]
-                            logger.info(f"Got annotations for {entity_id} entity")
-                            requests.add(asyncio.create_task(self.store_async_annotation(annotation_dict=annos)))
+                if isinstance(annos, Annotations):
+                    annos_dict = asdict(annos)
+                    entity_id = annos_dict["id"]
+                    logger.info(f"Successfully stored annotations for {entity_id}")
+                else:
+                    # remove special characters in annotations
+                    entity_id = annos["EntityId"]
+                    logger.info(f"Got annotations for {entity_id} entity")
+                    requests.add(asyncio.create_task(self.store_async_annotation(annotation_dict=annos)))
 
-                    except Exception as e:
-                        raise RuntimeError(f"failed with { repr(e) }.")
+            except Exception as e:
+                raise RuntimeError(f"failed with { repr(e) }.")
 
                 #logger.info(f"Added annotations to entity: {entityId}")
         #responses = await asyncio.gather(*requests)
